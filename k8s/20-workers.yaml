@@ -1,0 +1,58 @@
+# Kafka workers (Phase 3.1). Apply after Kafka is running in the cluster
+# (e.g. helm install kafka oci://registry-1.docker.io/bitnamicharts/kafka -n claimsense)
+# and set PROCESSING=kafka in the ConfigMap.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vision-worker
+  namespace: claimsense
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: vision-worker } }
+  template:
+    metadata: { labels: { app: vision-worker } }
+    spec:
+      containers:
+        - name: worker
+          image: claimsense-api:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "claimsense.streaming.run", "vision"]
+          envFrom: [{ configMapRef: { name: claimsense-config } }]
+          resources:
+            requests: { cpu: 500m, memory: 1Gi }
+            limits: { cpu: "2", memory: 3Gi }
+---
+# Scale vision workers on CPU. Needs metrics-server in kind:
+#   kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+#   (then add --kubelet-insecure-tls to its args for kind)
+# Partitions cap useful replicas: 4 partitions on claims.submitted = at most 4 busy workers.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: vision-worker
+  namespace: claimsense
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: vision-worker }
+  minReplicas: 1
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestrator
+  namespace: claimsense
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: orchestrator } }
+  template:
+    metadata: { labels: { app: orchestrator } }
+    spec:
+      containers:
+        - name: orchestrator
+          image: claimsense-api:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "claimsense.streaming.run", "orchestrator"]
+          envFrom: [{ configMapRef: { name: claimsense-config } }, { secretRef: { name: claimsense-secrets, optional: true } }]

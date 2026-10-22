@@ -1,0 +1,15 @@
+# ClaimSense analytics (booklet Phase 3.2, study guide E5)
+#   pip install dbt-postgres
+#   cp profiles.example.yml profiles.yml   # then edit the connection
+#   dbt run --profiles-dir . && dbt test --profiles-dir .
+name: claimsense
+version: "1.0.0"
+config-version: 2
+profile: claimsense
+model-paths: ["models"]
+models:
+  claimsense:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table

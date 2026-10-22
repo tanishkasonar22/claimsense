@@ -1,0 +1,29 @@
+# ClaimSense on local Kubernetes with kind (booklet Phase 3.6, study guide F2)
+#
+#   kind create cluster --name claimsense
+#   docker build -t claimsense-api:dev . && kind load docker-image claimsense-api:dev --name claimsense
+#   docker build -t claimsense-dashboard:dev dashboard && kind load docker-image claimsense-dashboard:dev --name claimsense
+#   kubectl apply -f k8s/
+#   kubectl -n claimsense port-forward svc/api 8000:8000
+#
+# Data stores: install with Helm (small single-node settings), for example:
+#   helm install pg oci://registry-1.docker.io/bitnamicharts/postgresql -n claimsense \
+#     --set auth.username=claimsense,auth.password=claimsense,auth.database=claimsense
+# or keep them in Docker Compose and point DATABASE_URL at your host (see booklet Phase 3.6 note).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: claimsense
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: claimsense-config
+  namespace: claimsense
+data:
+  CLAIMSENSE_MODE: full
+  LLM_PROVIDER: rules
+  DATABASE_URL: postgresql+psycopg://claimsense:claimsense@pg-postgresql:5432/claimsense
+  REDIS_URL: redis://redis:6379/0
+  KAFKA_BOOTSTRAP: kafka:9092
+  PROCESSING: inline

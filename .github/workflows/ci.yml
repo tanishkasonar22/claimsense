@@ -1,0 +1,58 @@
+# Lint, test, evaluation gate and dashboard build on every pull request (booklet Phases 1.6 and 3.5).
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+      - run: pip install -e ".[api,fraud,dev]"
+      - name: Lint
+        run: ruff check .
+      # Synthetic data is not in Git. Regenerate it (deterministic: same seed, same data) and cache it.
+      - uses: actions/cache@v4
+        id: data
+        with:
+          path: data/synthetic
+          key: synthetic-${{ hashFiles('generators/**', 'generate_all.py') }}
+      - if: steps.data.outputs.cache-hit != 'true'
+        run: python generate_all.py
+      - name: Unit tests
+        run: pytest -q
+      - name: Evaluation gate (fails the build if quality drops or an attack gets through)
+        run: python -m evals.ci_gate --limit 40
+      # To also gate the LLM route, add a GEMINI_API_KEY repository secret and uncomment:
+      # - name: Evaluation gate (Gemini)
+      #   env: { LLM_PROVIDER: gemini, GEMINI_API_KEY: "${{ secrets.GEMINI_API_KEY }}" }
+      #   run: python -m evals.run_gold --limit 20
+
+  dashboard:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: dashboard } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm install
+      - run: npm run typecheck
+      - run: npm run build
+
+  images:
+    if: github.ref == 'refs/heads/main'
+    needs: [python, dashboard]
+    runs-on: ubuntu-latest
+    permissions: { contents: read, packages: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      - uses: docker/build-push-action@v6
+        with: { context: ., push: true, tags: "ghcr.io/${{ github.repository }}/api:${{ github.sha }}" }
+      - uses: docker/build-push-action@v6
+        with: { context: dashboard, push: true, tags: "ghcr.io/${{ github.repository }}/dashboard:${{ github.sha }}" }

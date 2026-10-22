@@ -1,0 +1,11 @@
+{
+  "extraction.incident_type_ok": 1.0,
+  "extraction.stated_parts_f1": 1.0,
+  "extraction.consistency_ok": 1.0,
+  "coverage.coverage_ok": 0.95,
+  "coverage.deductible_ok": 1.0,
+  "fraud.pr_auc": 0.8822,
+  "decision.agreement": 0.925,
+  "redteam.blocked_rate": 1.0,
+  "redteam.false_positive_rate": 0.0
+}

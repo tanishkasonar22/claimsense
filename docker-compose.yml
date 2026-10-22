@@ -1,0 +1,159 @@
+# ClaimSense local stack.
+#
+#   docker compose up -d                                   # core: postgres, redis, minio, qdrant, api, dashboard
+#   docker compose --profile streaming up -d               # + kafka and the workers (Phase 3.1)
+#   docker compose --profile search up -d                  # + opensearch (Phase 2.4)
+#   docker compose --profile tracking up -d                # + mlflow (Phase 1.6 / 2.x)
+#   docker compose --profile pipelines up -d               # + airflow (Phase 3.2)
+#
+# Langfuse (tracing) has its own official compose file: https://langfuse.com/self-hosting
+# Run it separately and set LANGFUSE_* in .env.
+#
+# Ports: api 8000, dashboard 3000, postgres 5432, redis 6379, minio 9000/9001, qdrant 6333,
+#        kafka 29092 (from your laptop), opensearch 9200, mlflow 5000, airflow 8080
+
+x-app-env: &app-env
+  CLAIMSENSE_MODE: full
+  DATABASE_URL: postgresql+psycopg://claimsense:claimsense@postgres:5432/claimsense
+  S3_ENDPOINT: http://minio:9000
+  REDIS_URL: redis://redis:6379/0
+  QDRANT_URL: http://qdrant:6333
+  KAFKA_BOOTSTRAP: kafka:9092
+  LLM_PROVIDER: ${LLM_PROVIDER:-rules}
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  OPENAI_COMPAT_URL: ${OPENAI_COMPAT_URL:-http://host.docker.internal:11434/v1}
+
+services:
+  postgres:
+    image: postgres:16
+    environment: { POSTGRES_USER: claimsense, POSTGRES_PASSWORD: claimsense, POSTGRES_DB: claimsense }
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U claimsense"], interval: 5s, retries: 10 }
+
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment: { MINIO_ROOT_USER: minioadmin, MINIO_ROOT_PASSWORD: minioadmin }
+    ports: ["9000:9000", "9001:9001"]
+    volumes: [miniodata:/data]
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports: ["6333:6333"]
+    volumes: [qdrantdata:/qdrant/storage]
+
+  api:
+    build: .
+    command: uvicorn claimsense.api.main:app --host 0.0.0.0 --port 8000
+    environment: *app-env
+    ports: ["8000:8000"]
+    volumes: ["./data:/app/data"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on: { postgres: { condition: service_healthy }, minio: { condition: service_started } }
+    healthcheck: { test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"], interval: 10s }
+
+  dashboard:
+    build: ./dashboard
+    environment: { NEXT_PUBLIC_API_URL: "http://localhost:8000" }
+    ports: ["3000:3000"]
+    depends_on: [api]
+
+  # ---------------------------------------------------------------- streaming (Phase 3.1)
+  kafka:
+    image: apache/kafka:3.9.0
+    profiles: [streaming]
+    ports: ["29092:29092"]
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,HOST://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,HOST:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+
+  kafka-init:
+    build: .
+    profiles: [streaming]
+    command: python -m claimsense.streaming.run topics
+    environment: *app-env
+    depends_on: [kafka]
+
+  speech-worker:
+    build: .
+    profiles: [streaming]
+    command: python -m claimsense.streaming.run speech
+    environment: *app-env
+    volumes: ["./data:/app/data"]
+    depends_on: [kafka-init]
+
+  documents-worker:
+    build: .
+    profiles: [streaming]
+    command: python -m claimsense.streaming.run documents
+    environment: *app-env
+    volumes: ["./data:/app/data"]
+    depends_on: [kafka-init]
+
+  vision-worker:
+    build: .
+    profiles: [streaming]
+    command: python -m claimsense.streaming.run vision
+    environment: *app-env
+    volumes: ["./data:/app/data", "./models:/app/models"]
+    deploy: { replicas: 2 }        # scale with: docker compose up -d --scale vision-worker=4
+    depends_on: [kafka-init]
+
+  orchestrator:
+    build: .
+    profiles: [streaming]
+    command: python -m claimsense.streaming.run orchestrator
+    environment: *app-env
+    volumes: ["./data:/app/data", "./models:/app/models"]
+    depends_on: [kafka-init]
+
+  # ---------------------------------------------------------------- search (Phase 2.4)
+  opensearch:
+    image: opensearchproject/opensearch:2.17.0
+    profiles: [search]
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+    ports: ["9200:9200"]
+
+  # ---------------------------------------------------------------- experiment tracking
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.17.2
+    profiles: [tracking]
+    command: mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:////mlflow/mlflow.db --artifacts-destination /mlflow/artifacts
+    ports: ["5000:5000"]
+    volumes: [mlflowdata:/mlflow]
+
+  # ---------------------------------------------------------------- pipelines (Phase 3.2)
+  airflow:
+    image: apache/airflow:2.10.3
+    profiles: [pipelines]
+    command: standalone           # prints the admin password in the logs on first start
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      _PIP_ADDITIONAL_REQUIREMENTS: "pandas pyarrow pyspark dbt-postgres"
+    ports: ["8080:8080"]
+    volumes:
+      - ./pipelines/airflow/dags:/opt/airflow/dags
+      - .:/opt/claimsense
+
+volumes:
+  pgdata:
+  miniodata:
+  qdrantdata:
+  mlflowdata:

@@ -1,0 +1,12 @@
+claimsense:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: localhost
+      port: 5432
+      user: claimsense
+      password: claimsense
+      dbname: claimsense
+      schema: analytics
+      threads: 4

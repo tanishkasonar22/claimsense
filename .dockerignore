@@ -1,0 +1,12 @@
+.git
+.env
+data
+models
+uploads
+runs
+*.db
+*.sqlite
+dashboard
+**/__pycache__
+.venv
+evals/results

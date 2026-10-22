@@ -1,0 +1,33 @@
+# secrets
+.env
+*.pem
+
+# data and models (keep them in Google Drive / Hugging Face, not Git)
+data/synthetic/
+data/public/
+data/features/
+models/
+uploads/
+runs/
+*.db
+*.sqlite
+evals/results/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# node
+dashboard/node_modules/
+dashboard/.next/
+dashboard/next-env.d.ts
+
+# os / editors
+.DS_Store
+.vscode/
+.idea/
+k8s/01-secret.yaml
