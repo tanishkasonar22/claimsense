@@ -160,7 +160,7 @@ def step_recommend(sub: ClaimSubmission, res: ClaimResult, ctx: Context) -> None
         action = "approve"
     payout = None
     if cov and cov.covered and amount is not None:
-        payout = amount - (cov.deductible or 0)
+        payout = max(0.0, amount - (cov.deductible or 0))
 
     summary = _template_summary(action, res, amount, payout)
     if ctx.llm is not None:
@@ -185,6 +185,8 @@ def _template_summary(action, res: ClaimResult, amount, payout) -> str:
         s.append("Check: " + " ".join(res.consistency_issues))
     if res.safety.injection_suspected:
         s.append("Warning: claim content contains text that tries to instruct the AI; review it manually.")
+    if action == "approve" and payout == 0 and cov and cov.deductible and amount is not None:
+        s.append(f"The claim (${amount:,.2f}) is below the ${cov.deductible:,.2f} deductible, so nothing would be paid.")
     s.append(f"Recommendation: {action}" + (f", estimated payout ${payout:,.2f}." if action == "approve" and payout is not None else "."))
     return " ".join(s)
 

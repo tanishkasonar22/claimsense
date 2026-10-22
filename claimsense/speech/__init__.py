@@ -34,8 +34,9 @@ def transcribe(audio_path: str | Path | None, claim_id: str | None = None) -> Tr
                                   source="whisper", segments=segs)
             except ImportError:
                 pass
-    if claim_id:
-        script = voice_script(claim_id)
+    # Dashboard demo claims get IDs like "G000025-F843", so also try the audio file's stem ("G000025").
+    for key in (claim_id, Path(audio_path).stem if audio_path else None):
+        script = voice_script(key) if key else None
         if script:
             return Transcript(text=script, language="en", source="script_fallback")
     return Transcript(text="", source="none")

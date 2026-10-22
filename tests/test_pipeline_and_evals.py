@@ -30,6 +30,18 @@ def test_pipeline_end_to_end_on_gold(gold):
     assert agree / 40 >= 0.8
 
 
+def test_demo_claim_id_finds_voice_script_and_never_pays_negative(gold):
+    # Regression: dashboard demo IDs ("G000025-F843") broke the voice-script lookup, and a claim
+    # below the deductible produced a negative payout.
+    g = next(x for x in gold if x["claim_id"] == "G000025")
+    sub = submission_from_gold(g)
+    sub.claim_id = "G000025-TEST"
+    res, _ = run_pipeline(sub, Context(llm=None))
+    assert res.transcript.source == "script_fallback"
+    assert res.recommendation.action == "approve"
+    assert res.recommendation.payout_estimate == 0
+
+
 def test_injection_in_narrative_blocks_approval(gold):
     g = next(x for x in gold if x["expected"]["decision"] == "approve")
     sub = submission_from_gold(g)
